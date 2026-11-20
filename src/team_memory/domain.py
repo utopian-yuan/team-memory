@@ -2,7 +2,16 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
-from .models import Decision, Failure, Record, Source, iso, now
+from .models import (
+    WORKSPACE_STORAGE_KEY,
+    Decision,
+    Failure,
+    Record,
+    Source,
+    iso,
+    now,
+    public_adapter,
+)
 from .storage import Store, digest, packed, require, transition, uid
 
 CURRENT = "('active','disputed')"
@@ -85,7 +94,12 @@ class MemoryService:
                 if who
                 else s.external_id
             )
-            key = (s.space, s.adapter, external_id)
+            adapter_key = (
+                WORKSPACE_STORAGE_KEY
+                if s.adapter == "assistant_workspace"
+                else s.adapter
+            )
+            key = (s.space, adapter_key, external_id)
             row = db.execute(
                 "SELECT * FROM sources WHERE space=? AND adapter=? AND external_id=? AND revision=?",
                 (*key, revision),
@@ -304,7 +318,7 @@ class MemoryService:
         result["subjects"] = json.loads(result["subjects"])
         result["reason"] = json.loads(result["reason"])
         result["evidence"] = [
-            dict(e)
+            {**e, "adapter": public_adapter(e["adapter"])}
             for e in db.execute(
                 """SELECT e.source AS source_id,e.quote,e.offset,s.adapter,s.revision,s.space
                 FROM evidence e JOIN sources s ON s.id=e.source JOIN grants g ON g.space=s.space

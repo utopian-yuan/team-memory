@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import (
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -20,13 +21,24 @@ Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)
 ]
 Role = Literal["read", "write", "review"]
-Adapter = Literal[
-    "project_document",
-    "personal_note",
-    "codex_summary",
-    "feishu_group",
-    "copaw_memory",
-    "agent_note",
+# Sources written by older versions use this key for revision identity.
+WORKSPACE_STORAGE_KEY = "copaw_memory"
+
+
+def public_adapter(value):
+    return "assistant_workspace" if value == WORKSPACE_STORAGE_KEY else value
+
+
+Adapter = Annotated[
+    Literal[
+        "project_document",
+        "personal_note",
+        "codex_summary",
+        "feishu_group",
+        "assistant_workspace",
+        "agent_note",
+    ],
+    BeforeValidator(public_adapter),
 ]
 
 

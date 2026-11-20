@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .domain import retire_source
-from .models import Failure, Source
+from .models import WORKSPACE_STORAGE_KEY, Failure, Source
 from .storage import packed
 
 
@@ -143,7 +143,7 @@ def visible_legacy_text(text, project):
     return "\n".join(lines).strip()
 
 
-def copaw_import(service, root, spaces, dry_run=False):
+def import_workspace(service, root, spaces, dry_run=False):
     """Import allowlisted workspaces; preserve selected legacy rows in an operator-only ledger."""
     root = Path(root).resolve(strict=True)
     report, files = [], {}
@@ -184,8 +184,8 @@ def copaw_import(service, root, spaces, dry_run=False):
                     if not content:
                         with service.store.tx(not dry_run) as db:
                             old = db.execute(
-                                "SELECT id FROM sources WHERE space=? AND adapter='copaw_memory' AND external_id=? AND live=1",
-                                (space, relative),
+                                "SELECT id FROM sources WHERE space=? AND adapter=? AND external_id=? AND live=1",
+                                (space, WORKSPACE_STORAGE_KEY, relative),
                             ).fetchone()
                             if old and not dry_run:
                                 retire_source(db, old["id"])
@@ -199,7 +199,7 @@ def copaw_import(service, root, spaces, dry_run=False):
                         continue
                     src = Source(
                         space=space,
-                        adapter="copaw_memory",
+                        adapter="assistant_workspace",
                         external_id=relative,
                         text=content,
                         occurred_at=instant(file.stat().st_mtime, service.zone),
@@ -254,3 +254,7 @@ def copaw_import(service, root, spaces, dry_run=False):
         finally:
             old.close()
     return report
+
+
+# Compatibility with programmatic callers of the original importer.
+copaw_import = import_workspace

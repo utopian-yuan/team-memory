@@ -3,7 +3,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from team_memory.adapters import copaw_import, import_manifest
+from team_memory.adapters import import_manifest, import_workspace
 from team_memory.cli import snapshot
 from team_memory.domain import MemoryService
 from team_memory.jobs import Worker
@@ -36,7 +36,7 @@ def test_atlas_import_backup_restore(tmp_path):
     assert len(restored.reviews(who, "personal:demo")) == 1
 
 
-def test_feishu_and_copaw_migration(lab, tmp_path):
+def test_feishu_and_workspace_migration(lab, tmp_path):
     root = tmp_path / "legacy"
     raw = root / "group_workspace" / "a" / "raw" / "2026-11-16"
     raw.mkdir(parents=True)
@@ -57,7 +57,7 @@ def test_feishu_and_copaw_migration(lab, tmp_path):
     )
     old.commit()
     old.close()
-    report = copaw_import(lab.s, root, ["group:a"])
+    report = import_workspace(lab.s, root, ["group:a"])
     assert sorted(i["status"] for i in report) == [
         "added",
         "added",
@@ -65,7 +65,9 @@ def test_feishu_and_copaw_migration(lab, tmp_path):
         "mapped",
         "quarantined",
     ]
-    assert all(i["status"] != "added" for i in copaw_import(lab.s, root, ["group:a"]))
+    assert all(
+        i["status"] != "added" for i in import_workspace(lab.s, root, ["group:a"])
+    )
 
 
 def test_feishu_recall_does_not_cross_groups(lab, tmp_path):
@@ -92,21 +94,23 @@ def test_feishu_recall_does_not_cross_groups(lab, tmp_path):
     assert len(lab.s.reviews(lab.ana, "group:b")) == 1
 
 
-def test_copaw_hidden_blocks_do_not_enter_memory(lab, tmp_path):
+def test_hidden_workspace_blocks_do_not_enter_memory(lab, tmp_path):
     root = tmp_path / "old"
     doc = root / "project" / "atlas" / "knowledge" / "memory.md"
     doc.parent.mkdir(parents=True)
     doc.write_text(
         "公开记录\n<!-- project_memory_block hash=x state=forgotten -->\n已遗忘内容\n<!-- project_memory_block hash=y state=active source_chat_id=secret -->\n跨群原文"
     )
-    imported = copaw_import(lab.s, root, ["project:atlas"])[0]
+    imported = import_workspace(lab.s, root, ["project:atlas"])[0]
     with lab.st.tx(False) as db:
         key = db.execute(
             "SELECT blob FROM sources WHERE id=?", (imported["source_id"],)
         ).fetchone()[0]
     assert lab.st.read_blob(key) == "公开记录"
     doc.write_text("<!-- project_memory_block hash=x state=revoked -->\n余下均已撤回")
-    assert copaw_import(lab.s, root, ["project:atlas"])[0]["status"] == "quarantined"
+    assert (
+        import_workspace(lab.s, root, ["project:atlas"])[0]["status"] == "quarantined"
+    )
     with lab.st.tx(False) as db:
         assert not db.execute("SELECT 1 FROM sources WHERE live=1").fetchone()
 
@@ -146,3 +150,86 @@ def test_cli_quickstart_and_readonly_restore(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "snapshot" / "state.sqlite").read_bytes() == before
     assert Store(tmp_path / "restored").authenticate(token)["max_role"] == "read"
     assert run("revoke-token", "demo", "--client", "codex").strip() == "1"
+
+
+def test_shared_atlas_handoff(tmp_path):
+    import pytest
+
+    from team_memory.models import Decision, Failure, Record
+
+    store = Store(tmp_path / "data")
+    service = MemoryService(store)
+    for space in ("personal:demo", "project:atlas"):
+        store.grant("demo", space, "review")
+    store.grant("lin", "project:atlas", "write")
+    lin = store.authenticate(
+        store.issue("lin", "codex", spaces=["project:atlas"], max_role="write")
+    )
+    reviewer = store.authenticate(store.issue("demo", "reviewer", human=True))
+    manifest = Path(__file__).resolve().parents[2] / "examples/codex/atlas.toml"
+    assert all(item["status"] == "added" for item in import_manifest(service, manifest))
+    assert not Worker(service).run(day=date(2026, 11, 16))["errors"]
+    project = Context(space="project:atlas")
+    (original,) = service.context(lin, project)["current"]
+    assert "2026-11-23" in original["claim"]
+    with pytest.raises(Failure):
+        service.context(lin, Context(space="personal:demo"))
+    assert (
+        "我猜小林"
+        in service.reviews(reviewer, "personal:demo")[0]["candidate"]["claim"]
+    )
+
+    change = service.record(
+        lin,
+        Record(
+            space="project:atlas",
+            topic="release",
+            kind="decision",
+            claim="Atlas 改为 11 月 24 日上线，以便完成回归验收",
+            request_id="reschedule",
+        ),
+    )
+    assert service.context(lin, project)["current"] == [original]
+    service.decide(
+        reviewer, change["review_id"], Decision(action="confirm", expected_version=1)
+    )
+    assert "11 月 24 日" in service.context(lin, project)["current"][0]["claim"]
+    prior = service.get(lin, original["id"], original["version"])
+    assert prior["state"] == "superseded"
+    assert "下周一上线" in prior["evidence"][0]["quote"]
+
+
+def test_workspace_names_preserve_existing_imports(lab):
+    from datetime import datetime, timezone
+
+    from team_memory.cli import args_parser
+    from team_memory.models import WORKSPACE_STORAGE_KEY, Source
+
+    parser = args_parser()
+    assert "import-workspace" in parser.format_help()
+    assert "import-copaw" not in parser.format_help()
+    for command in ("import-workspace", "import-copaw"):
+        assert (
+            parser.parse_args([command, ".", "--space", "project:atlas"]).cmd
+            == "import-workspace"
+        )
+
+    fields = dict(
+        space="project:atlas",
+        external_id="review-notes",
+        text="评审小结",
+        occurred_at=datetime(2026, 11, 16, tzinfo=timezone.utc),
+    )
+    previous = lab.s.ingest(Source(adapter=WORKSPACE_STORAGE_KEY, **fields))
+    current = lab.s.ingest(Source(adapter="assistant_workspace", **fields))
+    assert current == {"status": "existing", "source_id": previous["source_id"]}
+    assert (
+        WORKSPACE_STORAGE_KEY
+        not in Source.model_json_schema()["properties"]["adapter"]["enum"]
+    )
+    record = lab.record("评审小结", current["source_id"])
+    lab.decide(record)
+    assert (
+        lab.s.get(lab.ana, record["memory_id"])["evidence"][0]["adapter"]
+        == "assistant_workspace"
+    )

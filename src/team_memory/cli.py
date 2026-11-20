@@ -13,7 +13,7 @@ from threading import Event
 import uvicorn
 from pydantic import TypeAdapter
 
-from .adapters import copaw_import, import_manifest
+from .adapters import import_manifest, import_workspace
 from .domain import MemoryService
 from .jobs import Worker
 from .models import Failure, Space
@@ -85,10 +85,11 @@ def args_parser():
     imp = sub.add_parser("import")
     imp.add_argument("--manifest", required=True)
     imp.add_argument("--dry-run", action="store_true")
-    copaw = sub.add_parser("import-copaw")
-    copaw.add_argument("directory")
-    copaw.add_argument("--space", action="append", required=True)
-    copaw.add_argument("--dry-run", action="store_true")
+    workspace = sub.add_parser("import-workspace")
+    workspace.set_defaults(cmd="import-workspace")
+    workspace.add_argument("directory")
+    workspace.add_argument("--space", action="append", required=True)
+    workspace.add_argument("--dry-run", action="store_true")
     for name in ("bind", "unbind"):
         b = sub.add_parser(name)
         b.add_argument("group")
@@ -106,6 +107,9 @@ def args_parser():
     restore = sub.add_parser("restore")
     restore.add_argument("snapshot")
     restore.add_argument("destination")
+    # Keep the previous command usable by existing scripts, outside the public help.
+    sub.metavar = "{" + ",".join(sub.choices) + "}"
+    sub.choices["import-copaw"] = workspace
     return parser
 
 
@@ -161,12 +165,14 @@ def main():
                 )
             case "revoke-token":
                 print(store.revoke_client(args.actor, args.client))
-            case "import" | "import-copaw":
+            case "import" | "import-workspace":
                 if args.cmd == "import":
                     result = import_manifest(service, args.manifest, args.dry_run)
                 else:
                     spaces = TypeAdapter(list[Space]).validate_python(args.space)
-                    result = copaw_import(service, args.directory, spaces, args.dry_run)
+                    result = import_workspace(
+                        service, args.directory, spaces, args.dry_run
+                    )
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 if any(r["status"] == "failed" for r in result):
                     raise SystemExit(1)
