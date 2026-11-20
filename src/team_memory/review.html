@@ -1,0 +1,49 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Team Memory · 记忆复验</title>
+<style>body{font:16px/1.65 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem;color:#20312d}input,textarea,button,select{font:inherit;padding:.4rem .6rem}label{display:block;margin:.8rem 0}textarea{width:95%}article{border-top:1px solid #bdcbc4;padding:1rem 0}pre{white-space:pre-wrap}button{cursor:pointer}</style>
+<h1>记忆复验</h1><form id="login"><label>空间 <input id="space" required></label><label>个人复验凭证 <input id="token" type="password" autocomplete="off" required></label><button>查看待复验记忆</button></form>
+<p role="status" id="status"></p><main id="items"></main>
+<script>
+const field = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+field('space').value = params.get('space') || '';
+async function api(path, options={}) {
+  const res = await fetch(path, {...options, headers:{Authorization:'Bearer '+field('token').value,'Content-Type':'application/json'}});
+  const data = await res.json();
+  if (!res.ok) throw Error(typeof data.detail === 'string' ? data.detail : '请核对提交的内容');
+  return data;
+}
+function make(parent, tag, text) {
+  const node = document.createElement(tag); node.textContent = text; parent.append(node); return node;
+}
+async function load() {
+  const query = new URLSearchParams({space:field('space').value});
+  if(params.has('id')) query.set('id',params.get('id'));
+  field('items').replaceChildren();
+  const list = await api('/v1/reviews?'+query);
+  field('status').textContent = '待复验 '+list.length+' 项';
+  for (const r of list) {
+    const item=make(field('items'),'article','');
+    make(item,'h2',r.candidate.claim);
+    make(item,'p','复验原因 · '+r.candidate.reason.join(' / '));
+    if(r.prior) make(item,'p','原决定 · '+r.prior.claim);
+    for(const e of r.candidate.evidence) make(item,'blockquote',e.quote+' · '+e.source_id);
+    const label=make(item,'label','修订后的内容');
+    const edit=make(label,'textarea',''); edit.value=r.candidate.claim;
+    const when=make(make(item,'label','再次提醒时间 '),'input',''); when.type='datetime-local';
+    for(const [action,name] of [['confirm','确认'],['edit','修改后确认'],['reject','驳回'],['defer','暂缓']]){
+      const button=make(item,'button',name);
+      button.onclick=async()=>{
+        try {
+          const data={action,expected_version:r.generation};
+          if(action==='edit')data.claim=edit.value;
+          if(action==='defer')data.remind_at=new Date(when.value).toISOString();
+          await api('/v1/reviews/'+encodeURIComponent(r.id)+'/decisions',{method:'POST',body:JSON.stringify(data)});
+          item.remove();field('status').textContent='已处理 · '+name;
+        }catch(e){field('status').textContent=e.message;}
+      };
+    }
+  }
+}
+field('login').onsubmit=async event=>{event.preventDefault();try{await load();}catch(e){field('status').textContent=e.message;}};
+</script></html>

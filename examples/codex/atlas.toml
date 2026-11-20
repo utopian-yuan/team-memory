@@ -1,0 +1,17 @@
+[[sources]]
+space = "project:atlas"
+adapter = "project_document"
+path = "fixtures/release-review.md"
+external_id = "atlas-review-1"
+occurred_at = "2026-11-16T12:00:00+08:00"
+author = "demo"
+verified = true
+
+[[sources]]
+space = "personal:demo"
+adapter = "personal_note"
+path = "fixtures/personal.md"
+external_id = "demo-note-1"
+occurred_at = "2026-11-16T09:00:00+08:00"
+author = "demo"
+verified = true

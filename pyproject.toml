@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "team-memory"
+version = "0.1.0"
+description = "Scoped team memory with evidence, scheduled digests and human review"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "mcp>=1.26,<2", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "pydantic>=2.10,<3"]
+
+[project.scripts]
+team-memory = "team_memory.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+team_memory = ["review.html"]
